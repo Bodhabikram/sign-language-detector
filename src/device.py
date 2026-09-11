@@ -17,26 +17,20 @@ import os
 import tensorflow as tf
 
 
-# ============================================================
 # OPTIONAL SETTINGS
-# ============================================================
 
 # Prevent TensorFlow from unnecessarily creating excessive
 # CPU thread pools.
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "1")
 
 
-# ============================================================
 # GPU DETECTION
-# ============================================================
 
 GPUS = tf.config.list_physical_devices("GPU")
 CPUS = tf.config.list_physical_devices("CPU")
 
 
-# ============================================================
 # GPU CONFIGURATION
-# ============================================================
 
 if GPUS:
     print("=" * 70)
@@ -74,9 +68,7 @@ else:
     DEVICE_TYPE = "CPU"
 
 
-# ============================================================
 # HARDWARE INFORMATION
-# ============================================================
 
 print(f"Selected device: {DEVICE}")
 print(f"Device type: {DEVICE_TYPE}")
@@ -86,9 +78,7 @@ print(f"TensorFlow version: {tf.__version__}")
 print("=" * 70)
 
 
-# ============================================================
 # HELPER FUNCTIONS
-# ============================================================
 
 def get_device():
     """
@@ -135,9 +125,7 @@ def print_device_summary():
     print("-" * 40)
 
 
-# ============================================================
 # MAIN TEST
-# ============================================================
 
 if __name__ == "__main__":
     print_device_summary()

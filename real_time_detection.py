@@ -4,12 +4,10 @@ import numpy as np
 import tensorflow as tf
 import os
 
-# ==================== CONFIG ====================
 MODEL_PATH = "models/best_sign_language_model.keras"
 DATASET_DIR = "dataset/processed" # Must match where we trained from
 IMG_SIZE = 128
 CONFIDENCE_THRESHOLD = 0.75
-# ================================================
 
 model = tf.keras.models.load_model(MODEL_PATH)
 class_names = sorted([d for d in os.listdir(DATASET_DIR) if os.path.isdir(os.path.join(DATASET_DIR, d))])

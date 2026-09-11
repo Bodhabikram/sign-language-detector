@@ -2,11 +2,9 @@ import cv2
 import mediapipe as mp
 import os
 
-# ==================== CONFIG ====================
 RAW_DIR = "dataset/raw_asl"
 PROCESSED_DIR = "dataset/processed"
 IMG_SIZE = 128
-# ================================================
 
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(static_image_mode=True, max_num_hands=1, min_detection_confidence=0.5)

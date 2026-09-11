@@ -15,6 +15,7 @@ from tensorflow.keras.layers import (
     Dense,
     Dropout,
     BatchNormalization
+
 )
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from tensorflow.keras.callbacks import (
@@ -32,7 +33,6 @@ from sklearn.metrics import (
 
 # ============================================================
 # CONFIGURATION
-# ============================================================
 
 IMG_SIZE = 128
 BATCH_SIZE = 32
@@ -54,24 +54,18 @@ TRAINING_PLOT_PATH = "models/baseline_cnn_v2_training.png"
 RANDOM_SEED = 42
 
 
-# ============================================================
 # REPRODUCIBILITY
-# ============================================================
 
 np.random.seed(RANDOM_SEED)
 tf.random.set_seed(RANDOM_SEED)
 
 
-# ============================================================
 # CREATE OUTPUT DIRECTORY
-# ============================================================
 
 os.makedirs("models", exist_ok=True)
 
 
-# ============================================================
 # PRINT ENVIRONMENT INFORMATION
-# ============================================================
 
 print("=" * 70)
 print("SIGN LANGUAGE DETECTION - CNN BASELINE V2")
@@ -87,9 +81,7 @@ print(f"Model output       : {MODEL_PATH}")
 print("=" * 70)
 
 
-# ============================================================
 # CHECK DATASET
-# ============================================================
 
 if not os.path.isdir(DATASET_DIR):
     raise FileNotFoundError(
@@ -97,7 +89,7 @@ if not os.path.isdir(DATASET_DIR):
     )
 
 
-required_classes = ["A", "B", "C", "D"]
+required_classes = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
 
 for class_name in required_classes:
     class_path = os.path.join(DATASET_DIR, class_name)
@@ -108,16 +100,11 @@ for class_name in required_classes:
         )
 
 
-# ============================================================
 # TRAINING DATA GENERATOR
-# ============================================================
-#
 # IMPORTANT:
 # Augmentation is applied ONLY to training images.
-#
 # Validation data will use a separate generator below
 # without random augmentation.
-# ============================================================
 
 train_datagen = ImageDataGenerator(
     rescale=1.0 / 255.0,
@@ -133,23 +120,16 @@ train_datagen = ImageDataGenerator(
 )
 
 
-# ============================================================
 # VALIDATION DATA GENERATOR
-# ============================================================
-#
 # Only normalization is applied.
 # No random augmentation.
-# ============================================================
-
 val_datagen = ImageDataGenerator(
     rescale=1.0 / 255.0,
     validation_split=0.2
 )
 
 
-# ============================================================
 # CREATE TRAINING GENERATOR
-# ============================================================
 
 train_gen = train_datagen.flow_from_directory(
     DATASET_DIR,
@@ -214,9 +194,9 @@ print(f"Validation batches    : {len(val_gen)}")
 # VERIFY CLASS COUNT
 # ============================================================
 
-if num_classes != 4:
+if num_classes != 26:
     raise ValueError(
-        f"Expected 4 classes (A, B, C, D), but found {num_classes}."
+        f"Expected 26 classes (A, B, C, ..., Z), but found {num_classes}."
     )
 
 
@@ -245,7 +225,7 @@ if num_classes != 4:
 # Flatten
 # Dense 128
 # Dropout 0.5
-# Dense 4 Softmax
+# Dense 26 Softmax
 #
 # The Input() layer is used explicitly for Keras 3 compatibility.
 # ============================================================
