@@ -123,4 +123,4 @@ for class_name in classes:
 with open(os.path.join(SAVE_DIR, "labels.json"), "w") as f:
     json.dump(label_dict, f)
 
-print("all done, files saved in processed_data folder")
+print("all done, files saved in processed folder")
