@@ -1,161 +1,184 @@
-# preprocessing code for asl project
-# basically converts all the hand images into landmark points using mediapipe
-# then saves it as train/test data for the model
-
 import os
-import cv2
-import mediapipe as mp
-import numpy as np
-import json
-import random
+from PIL import Image
 
-DATA_DIR = 'dataset/raw_asl'
-SAVE_DIR = "dataset/processed"
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
-# make the save folder if it doesnt exist yet
-if not os.path.exists(SAVE_DIR):
-    os.mkdir(SAVE_DIR)
+RAW_DATASET = "dataset/raw_asl"
+PROCESSED_DATASET = "dataset/processed"
 
-mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(static_image_mode=True, max_num_hands=1)
+IMG_SIZE = (128, 128)
 
-classes = os.listdir(DATA_DIR)
-classes.sort()  # sorting so labels stay consistent everytime we run this
-print("classes found:", classes)
-print("total classes:", len(classes))
+# Supported image formats
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
-data = []
-labels = []
 
-skipped = 0
-count_done = 0  # just to keep track how many images we actually processed
+# ============================================================
+# CREATE OUTPUT DIRECTORY
+# ============================================================
 
-# main loop, goes through every class folder one by one
-for label in range(len(classes)):
+os.makedirs(PROCESSED_DATASET, exist_ok=True)
 
-    folder_path = os.path.join(DATA_DIR, classes[label])
-    images = os.listdir(folder_path)
 
-    print("----")
-    print("class:", classes[label], " label num:", label)
-    print("images in this folder:", len(images))
+# ============================================================
+# FIND CLASS FOLDERS
+# ============================================================
 
-    for img_name in images:
+class_names = sorted([
+    folder for folder in os.listdir(RAW_DATASET)
+    if os.path.isdir(os.path.join(RAW_DATASET, folder))
+])
 
-        img_path = os.path.join(folder_path, img_name)
-        img = cv2.imread(img_path)
+print("=" * 60)
+print("SIGN LANGUAGE DATASET PREPROCESSING")
+print("=" * 60)
 
-        # sometimes an image doesnt load properly so we skip it
-        if img is None:
-            skipped = skipped + 1
-            continue
+print(f"\nInput dataset : {RAW_DATASET}")
+print(f"Output dataset: {PROCESSED_DATASET}")
+print(f"Image size    : {IMG_SIZE}")
+print(f"Classes found : {len(class_names)}")
 
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # mediapipe needs RGB
-        result = hands.process(img_rgb)
+print("\nClasses:")
+print(class_names)
 
-        if result.multi_hand_landmarks:
+if len(class_names) != 28:
+    print("\nWARNING:")
+    print(f"Expected 28 classes, but found {len(class_names)} classes.")
 
-            hand = result.multi_hand_landmarks[0]  # only using first hand
 
-            landmark_list = []
-            for point in hand.landmark:
-                landmark_list.append(point.x)
-                landmark_list.append(point.y)
-                landmark_list.append(point.z)
+# ============================================================
+# PROCESS EACH CLASS
+# ============================================================
 
-            # normalizing - subtracting wrist point (first landmark) from
-            # all the other points so the position on screen doesnt matter
-            wrist_x = landmark_list[0]
-            wrist_y = landmark_list[1]
-            wrist_z = landmark_list[2]
+total_processed = 0
+total_failed = 0
 
-            for i in range(0, len(landmark_list), 3):
-                landmark_list[i] = landmark_list[i] - wrist_x
-                landmark_list[i+1] = landmark_list[i+1] - wrist_y
-                landmark_list[i+2] = landmark_list[i+2] - wrist_z
+print("\n" + "=" * 60)
+print("PROCESSING IMAGES")
+print("=" * 60)
 
-            data.append(landmark_list)
-            labels.append(label)
-            count_done += 1
+for class_name in class_names:
 
-        else:
-            # no hand detected in the image, skip it
-            skipped = skipped + 1
+    input_class_path = os.path.join(
+        RAW_DATASET,
+        class_name
+    )
 
-print("----")
-print("done processing all folders")
-print("total used:", len(data))
-print("total skipped:", skipped)
-# print(len(data) == count_done)   # just checking, should be true lol
+    output_class_path = os.path.join(
+        PROCESSED_DATASET,
+        class_name
+    )
 
-X = np.array(data)
-y = np.array(labels)
+    os.makedirs(output_class_path, exist_ok=True)
 
-# ----- shuffle -----
-# doing it manually with indexes instead of using sklearn train_test_split
-# cuz i didnt wanna install another library for just this
+    processed_count = 0
+    failed_count = 0
 
-indexes = []
-for i in range(len(X)):
-    indexes.append(i)
+    # Get image files
+    image_files = [
+        file for file in os.listdir(input_class_path)
+        if file.lower().endswith(IMAGE_EXTENSIONS)
+    ]
 
-random.shuffle(indexes)
+    print(f"\n[{class_name}] Found {len(image_files)} images")
 
-X_shuffled = []
-y_shuffled = []
+    for filename in image_files:
 
-for i in indexes:
-    X_shuffled.append(X[i])
-    y_shuffled.append(y[i])
+        input_path = os.path.join(
+            input_class_path,
+            filename
+        )
 
-X = np.array(X_shuffled)
-y = np.array(y_shuffled)
+        # Save everything as JPG
+        output_filename = os.path.splitext(filename)[0] + ".jpg"
 
-# ----- train test split (80/20) -----
-split = int(len(X) * 0.8)
+        output_path = os.path.join(
+            output_class_path,
+            output_filename
+        )
 
-X_train = X[:split]
-y_train = y[:split]
-X_test = X[split:]
-y_test = y[split:]
+        try:
 
-print("train size:", len(X_train))
-print("test size:", len(X_test))
+            # ------------------------------------------------
+            # Open image
+            # ------------------------------------------------
 
-# saving all the numpy files
-np.save(os.path.join(SAVE_DIR, "X_train.npy"), X_train)
-np.save(os.path.join(SAVE_DIR, "y_train.npy"), y_train)
-np.save(os.path.join(SAVE_DIR, "X_test.npy"), X_test)
-np.save(os.path.join(SAVE_DIR, "y_test.npy"), y_test)
+            image = Image.open(input_path)
 
-# saving label mapping as a picture (table image) instead of json
-import matplotlib.pyplot as plt
+            # ------------------------------------------------
+            # Convert to RGB
+            # ------------------------------------------------
 
-label_dict = {}
-count = 0
-for class_name in classes:
-    label_dict[count] = class_name
-    count = count + 1
+            image = image.convert("RGB")
 
-table_data = []
-for key in label_dict:
-    table_data.append([str(key), label_dict[key]])
+            # ------------------------------------------------
+            # Resize to 128x128
+            # ------------------------------------------------
 
-fig, ax = plt.subplots(figsize=(4, len(table_data) * 0.35))
-ax.axis("off")
+            image = image.resize(
+                IMG_SIZE,
+                Image.Resampling.LANCZOS
+            )
 
-table = ax.table(
-    cellText=table_data,
-    colLabels=["Label #", "Class Name"],
-    cellLoc="center",
-    loc="center"
+            # ------------------------------------------------
+            # Save processed image
+            # ------------------------------------------------
+
+            image.save(
+                output_path,
+                "JPEG",
+                quality=95
+            )
+
+            processed_count += 1
+
+        except Exception as e:
+
+            failed_count += 1
+
+            print(
+                f"  Failed: {filename} -> {e}"
+            )
+
+    total_processed += processed_count
+    total_failed += failed_count
+
+    print(
+        f"  Processed: {processed_count} | "
+        f"Failed: {failed_count}"
+    )
+
+
+# ============================================================
+# SUMMARY
+# ============================================================
+
+print("\n" + "=" * 60)
+print("PREPROCESSING COMPLETE")
+print("=" * 60)
+
+print(f"\nClasses processed : {len(class_names)}")
+print(f"Images processed  : {total_processed}")
+print(f"Images failed     : {total_failed}")
+
+print(
+    f"\nProcessed dataset saved at:"
+    f"\n{PROCESSED_DATASET}"
 )
-table.auto_set_font_size(False)
-table.set_fontsize(10)
-table.scale(1, 1.2)
 
-plt.tight_layout()
-plt.savefig(os.path.join(SAVE_DIR, "labels.png"), dpi=150, bbox_inches="tight")
-plt.close()
+print("\nDataset structure:")
+print("dataset/")
+print("├── raw_asl/")
+print("│   ├── A/")
+print("│   ├── B/")
+print("│   ├── C/")
+print("│   └── ...")
+print("│")
+print("└── processed/")
+print("    ├── A/")
+print("    ├── B/")
+print("    ├── C/")
+print("    └── ...")
 
-print("all done, files saved in processed_data folder")
+print("\nDone!")
