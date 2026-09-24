@@ -3,9 +3,7 @@ import csv
 import random
 from PIL import Image
 
-# ============================================================
 # CONFIGURATION
-# ============================================================
 
 RAW_DATASET = "dataset/raw_asl"
 PROCESSED_DATASET = "dataset/processed"
@@ -29,24 +27,20 @@ TEST_RATIO = 0.15
 RANDOM_SEED = 42
 
 
-# ============================================================
 # CREATE OUTPUT DIRECTORY
-# ============================================================
 
 os.makedirs(PROCESSED_DATASET, exist_ok=True)
 random.seed(RANDOM_SEED)
 
 
-# ============================================================
 # FIND CLASS FOLDERS
-# ============================================================
 
 class_names = sorted([
     folder for folder in os.listdir(RAW_DATASET)
     if os.path.isdir(os.path.join(RAW_DATASET, folder))
 ])
 
-# class_name -> integer index (needed by most training frameworks)
+# class_name -> integer index 
 class_to_index = {name: idx for idx, name in enumerate(class_names)}
 
 print("=" * 60)
@@ -66,9 +60,7 @@ if len(class_names) != 28:
     print(f"Expected 28 classes, but found {len(class_names)} classes.")
 
 
-# ============================================================
 # PROCESS EACH CLASS + COLLECT LABEL RECORDS
-# ============================================================
 
 total_processed = 0
 total_failed = 0
@@ -104,9 +96,8 @@ for class_name in class_names:
         output_path = os.path.join(output_class_path, output_filename)
 
         try:
-            # ------------------------------------------------
             # Open, convert, resize, save
-            # ------------------------------------------------
+
             image = Image.open(input_path)
             image = image.convert("RGB")
             image = image.resize(IMG_SIZE, Image.Resampling.LANCZOS)
@@ -114,9 +105,8 @@ for class_name in class_names:
 
             processed_count += 1
 
-            # ------------------------------------------------
             # Record label entry (relative path, for portability)
-            # ------------------------------------------------
+
             relative_path = os.path.join(class_name, output_filename)
             all_records.append((relative_path, class_name, class_to_index[class_name]))
 
@@ -130,9 +120,7 @@ for class_name in class_names:
     print(f"  Processed: {processed_count} | Failed: {failed_count}")
 
 
-# ============================================================
 # WRITE FULL LABELS CSV
-# ============================================================
 
 print("\n" + "=" * 60)
 print("WRITING LABELS CSV")
@@ -146,11 +134,7 @@ with open(LABELS_CSV, "w", newline="") as f:
 print(f"\nWrote {len(all_records)} entries to {LABELS_CSV}")
 
 
-# ============================================================
 # CLASS-BALANCED TRAIN / VAL / TEST SPLIT
-# ============================================================
-# Splitting per class (not globally at random) keeps every class
-# proportionally represented in train, val, and test.
 
 print("\n" + "=" * 60)
 print("SPLITTING DATASET (train / val / test)")
@@ -195,9 +179,7 @@ write_split_csv(VAL_CSV, val_records)
 write_split_csv(TEST_CSV, test_records)
 
 
-# ============================================================
 # SUMMARY
-# ============================================================
 
 print("\n" + "=" * 60)
 print("PREPROCESSING + LABELING COMPLETE")
@@ -216,22 +198,4 @@ print(f"Full labels CSV            : {LABELS_CSV}")
 print(f"Train CSV                  : {TRAIN_CSV}")
 print(f"Val CSV                    : {VAL_CSV}")
 print(f"Test CSV                   : {TEST_CSV}")
-
-print("\nDataset structure:")
-print("dataset/")
-print("├── raw_asl/")
-print("│   ├── A/")
-print("│   ├── B/")
-print("│   └── ...")
-print("│")
-print("├── processed/")
-print("│   ├── A/")
-print("│   ├── B/")
-print("│   └── ...")
-print("│")
-print("├── labels.csv     <- full dataset, all images labeled")
-print("├── train.csv       <- 70% per class")
-print("├── val.csv         <- 15% per class")
-print("└── test.csv        <- 15% per class")
-
 print("\nDone!")

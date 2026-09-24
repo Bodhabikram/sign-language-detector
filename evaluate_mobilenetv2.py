@@ -16,9 +16,7 @@ from sklearn.metrics import (
 from data_loader import get_datasets
 
 
-# ============================================================
 # CONFIGURATION
-# ============================================================
 
 MODEL_PATH = "models/mobilenetv2_stage1_final.keras"
 
@@ -35,9 +33,7 @@ CLASS_NAMES = [
 ]
 
 
-# ============================================================
 # CHECK CLASS COUNT
-# ============================================================
 
 print("=" * 60)
 print("MOBILENETV2 MODEL EVALUATION")
@@ -52,9 +48,7 @@ if len(CLASS_NAMES) != NUM_CLASSES:
     )
 
 
-# ============================================================
 # LOAD DATASETS
-# ============================================================
 
 print("\nLoading datasets...")
 
@@ -63,9 +57,7 @@ train_ds, val_ds, test_ds = get_datasets()
 print("Datasets loaded successfully.")
 
 
-# ============================================================
 # LOAD TRAINED MODEL
-# ============================================================
 
 print("\nLoading trained MobileNetV2 model...")
 
@@ -82,9 +74,7 @@ print("\nModel output shape:")
 print(model.output_shape)
 
 
-# ============================================================
 # EVALUATE ON TEST DATA
-# ============================================================
 
 print("\n" + "=" * 60)
 print("EVALUATING ON TEST DATA")
@@ -104,9 +94,7 @@ print(f"Test Accuracy : {test_accuracy:.4f}")
 print(f"Test Accuracy : {test_accuracy * 100:.2f}%")
 
 
-# ============================================================
 # GENERATE PREDICTIONS
-# ============================================================
 
 print("\nGenerating predictions...")
 
@@ -121,9 +109,7 @@ predicted_labels = np.argmax(
 )
 
 
-# ============================================================
 # GET TRUE LABELS
-# ============================================================
 
 true_labels = []
 
@@ -144,9 +130,7 @@ for images, labels in test_ds:
 true_labels = np.array(true_labels)
 
 
-# ============================================================
 # CHECK PREDICTION COUNT
-# ============================================================
 
 print("\nNumber of test samples:")
 print(len(true_labels))
@@ -162,9 +146,7 @@ if len(true_labels) != len(predicted_labels):
     )
 
 
-# ============================================================
 # CALCULATE METRICS
-# ============================================================
 
 accuracy = accuracy_score(
     true_labels,
@@ -193,9 +175,7 @@ f1 = f1_score(
 )
 
 
-# ============================================================
 # PRINT METRICS
-# ============================================================
 
 print("\n" + "=" * 60)
 print("PERFORMANCE METRICS")
@@ -214,9 +194,7 @@ print(f"\nF1 Score  : {f1:.4f}")
 print(f"F1 Score  : {f1 * 100:.2f}%")
 
 
-# ============================================================
 # CLASSIFICATION REPORT
-# ============================================================
 
 print("\n" + "=" * 60)
 print("CLASSIFICATION REPORT")
@@ -233,9 +211,7 @@ report = classification_report(
 print(report)
 
 
-# ============================================================
 # SAVE CLASSIFICATION REPORT
-# ============================================================
 
 REPORT_PATH = (
     "models/mobilenetv2_classification_report.txt"
@@ -278,9 +254,7 @@ print(
 )
 
 
-# ============================================================
 # CONFUSION MATRIX
-# ============================================================
 
 print("\nGenerating confusion matrix...")
 
@@ -330,9 +304,7 @@ print(
 )
 
 
-# ============================================================
 # FINAL SUMMARY
-# ============================================================
 
 print("\n" + "=" * 60)
 print("EVALUATION COMPLETE")

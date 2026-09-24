@@ -2,9 +2,7 @@ import os
 import pandas as pd
 import tensorflow as tf
 
-# ============================================================
 # CONFIGURATION
-# ============================================================
 
 PROCESSED_DATASET = "dataset/processed"
 
@@ -19,9 +17,7 @@ NUM_CLASSES = 28
 AUTOTUNE = tf.data.AUTOTUNE
 
 
-# ============================================================
 # LOAD CSV
-# ============================================================
 
 def load_csv(csv_path):
     """
@@ -42,9 +38,7 @@ def load_csv(csv_path):
     return full_paths, labels
 
 
-# ============================================================
 # IMAGE LOADING + DECODING
-# ============================================================
 
 def load_and_decode_image(filepath, label):
     """
@@ -81,9 +75,7 @@ def load_and_decode_image(filepath, label):
     return image, label
 
 
-# ============================================================
 # AUGMENTATION
-# ============================================================
 
 _rotation_layer = tf.keras.layers.RandomRotation(
     factor=0.03
@@ -92,25 +84,14 @@ _rotation_layer = tf.keras.layers.RandomRotation(
 
 def augment_image(image, label):
 
-    # --------------------------------------------------------
     # Horizontal flip DISABLED
-    # --------------------------------------------------------
-    # Some ASL signs can change meaning when mirrored.
-    # Therefore, we do not use horizontal flipping.
 
-    # --------------------------------------------------------
-    # Random brightness
-    # --------------------------------------------------------
-    # Images are now 0-255, so brightness delta is also
-    # specified on the 0-255 scale.
     image = tf.image.random_brightness(
         image,
         max_delta=38.25
     )
 
-    # --------------------------------------------------------
     # Random contrast
-    # --------------------------------------------------------
 
     image = tf.image.random_contrast(
         image,
@@ -118,18 +99,14 @@ def augment_image(image, label):
         upper=1.15
     )
 
-    # --------------------------------------------------------
     # Small rotation
-    # --------------------------------------------------------
 
     image = _rotation_layer(
         image,
         training=True
     )
 
-    # --------------------------------------------------------
     # Keep pixels in valid 0-255 range
-    # --------------------------------------------------------
 
     image = tf.clip_by_value(
         image,
@@ -140,9 +117,7 @@ def augment_image(image, label):
     return image, label
 
 
-# ============================================================
 # BUILD DATASET
-# ============================================================
 
 def build_dataset(
     csv_path,
@@ -189,10 +164,7 @@ def build_dataset(
 
     return dataset
 
-
-# ============================================================
 # GET TRAIN / VALIDATION / TEST DATASETS
-# ============================================================
 
 def get_datasets():
 
@@ -216,10 +188,7 @@ def get_datasets():
 
     return train_ds, val_ds, test_ds
 
-
-# ============================================================
 # SANITY CHECK
-# ============================================================
 
 if __name__ == "__main__":
 
@@ -229,9 +198,7 @@ if __name__ == "__main__":
     print("DATA LOADER SANITY CHECK")
     print("=" * 60)
 
-    # --------------------------------------------------------
     # Training batch
-    # --------------------------------------------------------
 
     for images, labels in train_ds.take(1):
 
@@ -249,9 +216,7 @@ if __name__ == "__main__":
             f"{tf.reduce_max(images):.3f}]"
         )
 
-    # --------------------------------------------------------
     # Validation batch
-    # --------------------------------------------------------
 
     for images, labels in val_ds.take(1):
 
@@ -269,9 +234,7 @@ if __name__ == "__main__":
             f"{tf.reduce_max(images):.3f}]"
         )
 
-    # --------------------------------------------------------
     # Test batch
-    # --------------------------------------------------------
 
     for images, labels in test_ds.take(1):
 

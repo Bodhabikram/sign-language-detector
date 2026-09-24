@@ -4,9 +4,7 @@ import tensorflow as tf
 import mediapipe as mp
 from collections import deque
 
-# ============================================================
 # CONFIGURATION
-# ============================================================
 
 MODEL_PATH = "models/mobilenetv2_stage1_final.keras"
 
@@ -25,59 +23,40 @@ CLASS_NAMES = [
 # Minimum confidence to display a prediction as "recognized"
 CONFIDENCE_THRESHOLD = 0.75
 
-# Padding added around MediaPipe's hand bounding box before cropping,
-# as a fraction of the box size. Prevents fingertips being cut off.
+# Padding added around MediaPipe's hand bounding box before cropping
 BOX_PADDING_RATIO = 0.25
 
-# Number of recent predictions to smooth over (reduces frame-to-frame
-# jitter/flicker in the displayed label)
+# Number of recent predictions to smooth over 
 SMOOTHING_WINDOW = 8
 
 # Show a separate window with the exact image being fed to the model.
-# Useful for comparing live crops against training images visually.
 SHOW_DEBUG_WINDOW = True
 
 
-# ============================================================
 # LOAD TRAINED MODEL
-# ============================================================
 
 print("Loading trained model...")
 model = tf.keras.models.load_model(MODEL_PATH)
 print("Model loaded.")
 
 
-# ============================================================
 # SETUP MEDIAPIPE HANDS
-# ============================================================
 
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 
 hands = mp_hands.Hands(
     static_image_mode=False,
-    max_num_hands=1,          # single-hand fingerspelling; raise if you need two
+    max_num_hands=2,          # double-hand fingerspelling
     min_detection_confidence=0.6,
     min_tracking_confidence=0.6
 )
 
 
-# ============================================================
 # HELPER: GET PADDED BOUNDING BOX FROM LANDMARKS
-# ============================================================
 
 def get_hand_bounding_box(landmarks, frame_width, frame_height):
-    """
-    Converts MediaPipe's normalized (0-1) landmark coordinates into a
-    pixel-space bounding box, pads it, and then forces it SQUARE
-    (centered on the hand) before returning.
-
-    Why square: cv2.resize() to a square IMG_SIZE will stretch/distort
-    a non-square crop, warping hand proportions the model never saw
-    during training (Kaggle training images are effectively square
-    hand crops). Squaring the box here, before resize, avoids that
-    distortion entirely - no letterboxing needed.
-    """
+    
     x_coords = [lm.x * frame_width for lm in landmarks.landmark]
     y_coords = [lm.y * frame_height for lm in landmarks.landmark]
 
@@ -95,10 +74,7 @@ def get_hand_bounding_box(landmarks, frame_width, frame_height):
     y_min -= pad_y
     y_max += pad_y
 
-    # --------------------------------------------------------
-    # Force square: expand the shorter side to match the longer
-    # side, keeping the box centered on the hand.
-    # --------------------------------------------------------
+   
     box_w = x_max - x_min
     box_h = y_max - y_min
     side = max(box_w, box_h)
@@ -111,8 +87,7 @@ def get_hand_bounding_box(landmarks, frame_width, frame_height):
     y_min = center_y - side / 2
     y_max = center_y + side / 2
 
-    # Clamp to frame bounds (may slightly break squareness at edges,
-    # which is unavoidable - hand too close to frame edge)
+    
     x_min = max(0, int(x_min))
     y_min = max(0, int(y_min))
     x_max = min(frame_width, int(x_max))
@@ -121,17 +96,10 @@ def get_hand_bounding_box(landmarks, frame_width, frame_height):
     return x_min, y_min, x_max, y_max
 
 
-# ============================================================
 # HELPER: PREPROCESS CROPPED HAND FOR THE MODEL
-# ============================================================
 
 def preprocess_hand_crop(hand_crop_bgr):
-    """
-    Takes a BGR crop from OpenCV, converts to RGB, resizes to the
-    model's expected input size, and keeps pixels in 0-255 range -
-    matching data_loader.py, since preprocess_input is baked into
-    the model graph itself (model.py).
-    """
+   
     rgb = cv2.cvtColor(hand_crop_bgr, cv2.COLOR_BGR2RGB)
     resized = cv2.resize(rgb, IMG_SIZE)
     array = resized.astype(np.float32)  # keep 0-255, do NOT divide here
@@ -139,9 +107,7 @@ def preprocess_hand_crop(hand_crop_bgr):
     return array
 
 
-# ============================================================
 # MAIN LOOP
-# ============================================================
 
 def main():
     cap = cv2.VideoCapture(0)
@@ -222,9 +188,7 @@ def main():
         else:
             recent_predictions.clear()
 
-        # --------------------------------------------------------
         # Draw prediction text on frame
-        # --------------------------------------------------------
         cv2.putText(
             frame, display_label, (20, 50),
             cv2.FONT_HERSHEY_SIMPLEX, 1.2, display_color, 3

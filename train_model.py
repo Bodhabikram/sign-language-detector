@@ -7,9 +7,7 @@ from data_loader import get_datasets
 from model import build_model
 
 
-# ============================================================
 # CONFIGURATION
-# ============================================================
 
 EPOCHS = 20
 
@@ -27,26 +25,14 @@ FINAL_MODEL_PATH = os.path.join(
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 
-# ============================================================
 # LOAD DATASETS
-# ============================================================
-
-print("=" * 60)
-print("LOADING DATASETS")
-print("=" * 60)
 
 train_ds, val_ds, test_ds = get_datasets()
 
 print("\nDatasets loaded successfully.")
 
 
-# ============================================================
 # BUILD MODEL
-# ============================================================
-
-print("\n" + "=" * 60)
-print("BUILDING MOBILENETV2 MODEL")
-print("=" * 60)
 
 model = build_model()
 
@@ -61,9 +47,7 @@ model.compile(
 model.summary()
 
 
-# ============================================================
 # CALLBACKS
-# ============================================================
 
 early_stopping = tf.keras.callbacks.EarlyStopping(
     monitor="val_loss",
@@ -91,13 +75,7 @@ reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
 )
 
 
-# ============================================================
 # TRAIN MODEL
-# ============================================================
-
-print("\n" + "=" * 60)
-print("STARTING MOBILENETV2 TRAINING")
-print("=" * 60)
 
 start_time = time.time()
 
@@ -115,9 +93,7 @@ history = model.fit(
 training_time = time.time() - start_time
 
 
-# ============================================================
 # SAVE FINAL MODEL
-# ============================================================
 
 model.save(FINAL_MODEL_PATH)
 
@@ -134,9 +110,7 @@ print(f"\nFinal model saved at:")
 print(FINAL_MODEL_PATH)
 
 
-# ============================================================
 # TRAINING RESULTS
-# ============================================================
 
 train_accuracy = history.history["accuracy"]
 val_accuracy = history.history["val_accuracy"]
@@ -161,9 +135,7 @@ print(f"\nBest epoch          : {best_epoch}")
 print(f"Best validation acc : {best_val_accuracy:.4f}")
 
 
-# ============================================================
 # PLOT ACCURACY
-# ============================================================
 
 plt.figure(figsize=(8, 5))
 
@@ -193,9 +165,7 @@ plt.savefig(
 plt.show()
 
 
-# ============================================================
 # PLOT LOSS
-# ============================================================
 
 plt.figure(figsize=(8, 5))
 
