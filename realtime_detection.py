@@ -1,24 +1,21 @@
+import json
+import os
+
 import cv2
 import numpy as np
 import tensorflow as tf
 import mediapipe as mp
 from collections import deque
+from config import CAMERA_INDEX, LABELS_PATH, MODEL_PATH
+from preprocess_data import preprocess_single_image
 
 # CONFIGURATION
 
-MODEL_PATH = "models/mobilenetv2_stage1_final.keras"
-
-IMG_SIZE = (128, 128)
-
-# Same order used during preprocessing/training - do not change
-CLASS_NAMES = [
-    "A", "B", "C", "D", "E", "F", "G",
-    "H", "I", "J", "K", "L", "M", "N",
-    "O", "P", "Q", "R", "S", "T", "U",
-    "V", "W", "X", "Y", "Z",
-    "nothing",
-    "space"
-]
+if not os.path.isfile(LABELS_PATH):
+    raise FileNotFoundError("Class labels are missing. Run preprocessing before inference.")
+with open(LABELS_PATH, "r", encoding="utf-8") as labels_file:
+    label_mapping = json.load(labels_file)
+CLASS_NAMES = [label_mapping[str(index)] for index in range(len(label_mapping))]
 
 # Minimum confidence to display a prediction as "recognized"
 CONFIDENCE_THRESHOLD = 0.75
@@ -37,6 +34,11 @@ SHOW_DEBUG_WINDOW = True
 
 print("Loading trained model...")
 model = tf.keras.models.load_model(MODEL_PATH)
+if model.output_shape[-1] != len(CLASS_NAMES):
+    raise ValueError(
+        f"Model has {model.output_shape[-1]} outputs, but labels.json has "
+        f"{len(CLASS_NAMES)} classes. Retrain the model after preprocessing."
+    )
 print("Model loaded.")
 
 
@@ -98,11 +100,16 @@ def get_hand_bounding_box(landmarks, frame_width, frame_height):
 
 # HELPER: PREPROCESS CROPPED HAND FOR THE MODEL
 
-def preprocess_hand_crop(hand_crop_bgr):
-   
-    rgb = cv2.cvtColor(hand_crop_bgr, cv2.COLOR_BGR2RGB)
-    resized = cv2.resize(rgb, IMG_SIZE)
-    array = resized.astype(np.float32)  # keep 0-255, do NOT divide here
+def preprocess_camera_frame(frame_bgr):
+    """Apply the same background and image-level preprocessing used for training."""
+    processed_bgr = preprocess_single_image(
+        frame_bgr,
+        tracker=None,
+        isolate_hand=True,
+        enhance_levels=True,
+    )
+    rgb = cv2.cvtColor(processed_bgr, cv2.COLOR_BGR2RGB)
+    array = rgb.astype(np.float32)  # keep 0-255; the model preprocesses internally
     array = np.expand_dims(array, axis=0)  # add batch dimension
     return array
 
@@ -110,7 +117,7 @@ def preprocess_hand_crop(hand_crop_bgr):
 # MAIN LOOP
 
 def main():
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(CAMERA_INDEX)
 
     if not cap.isOpened():
         print("ERROR: Could not open webcam.")
@@ -127,7 +134,8 @@ def main():
             print("Failed to read frame from webcam.")
             break
 
-        frame = cv2.flip(frame, 1)  # mirror for natural selfie-view
+        # Keep the camera image unmirrored to match the orientation in the training set.
+        model_frame = frame.copy()
         frame_height, frame_width = frame.shape[:2]
 
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -150,12 +158,12 @@ def main():
 
             # Skip degenerate boxes (can happen at frame edges)
             if x_max > x_min and y_max > y_min:
-                hand_crop = frame[y_min:y_max, x_min:x_max]
-
-                model_input = preprocess_hand_crop(hand_crop)
+                # Training uses the preprocessed full image (not a landmark crop).
+                # Use the untouched frame: drawing overlays would alter model input.
+                model_input = preprocess_camera_frame(model_frame)
 
                 if SHOW_DEBUG_WINDOW:
-                    # model_input is RGB, 0-255 float, shape (1,128,128,3)
+                    # model_input is RGB, 0-255 float, shape (1,224,224,3)
                     debug_view = model_input[0].astype(np.uint8)
                     debug_view_bgr = cv2.cvtColor(debug_view, cv2.COLOR_RGB2BGR)
                     # Upscale just for visibility, doesn't affect the model
@@ -167,21 +175,26 @@ def main():
                 predicted_index = int(np.argmax(predictions))
                 confidence = float(predictions[predicted_index])
 
-                recent_predictions.append(predicted_index)
+                recent_predictions.append((predicted_index, confidence))
 
-                # Smooth: use the most common prediction in the recent window
-                smoothed_index = max(
-                    set(recent_predictions),
-                    key=recent_predictions.count
+                # Smooth the class and its confidence over the same recent predictions.
+                vote_counts = np.bincount(
+                    [index for index, _ in recent_predictions],
+                    minlength=len(CLASS_NAMES),
                 )
+                smoothed_index = int(np.argmax(vote_counts))
+                smoothed_confidence = float(np.mean([
+                    score for index, score in recent_predictions
+                    if index == smoothed_index
+                ]))
 
                 cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
 
-                if confidence >= CONFIDENCE_THRESHOLD:
-                    display_label = f"{CLASS_NAMES[smoothed_index]} ({confidence*100:.1f}%)"
+                if smoothed_confidence >= CONFIDENCE_THRESHOLD:
+                    display_label = f"{CLASS_NAMES[smoothed_index]} ({smoothed_confidence*100:.1f}%)"
                     display_color = (0, 255, 0)  # green
                 else:
-                    display_label = f"Uncertain ({confidence*100:.1f}%)"
+                    display_label = f"Uncertain ({smoothed_confidence*100:.1f}%)"
                     display_color = (0, 165, 255)  # orange
             else:
                 recent_predictions.clear()

@@ -1,322 +1,176 @@
+"""
+Evaluate the trained MobileNetV2 sign language model on the test set.
+
+Fixes compared with the original:
+  - predictions and true labels are collected in ONE pass (no shuffle mismatch)
+  - output folder is created automatically
+  - plots are saved without blocking (set SHOW_PLOTS = True to display them)
+  - normalised confusion matrix, most-confused pairs, optional training curves
+"""
 import os
+import json
 import numpy as np
 import tensorflow as tf
+
+import matplotlib
+SHOW_PLOTS = False
+if not SHOW_PLOTS:
+    matplotlib.use("Agg")           # works without a display (WSL, servers)
 import matplotlib.pyplot as plt
 
 from sklearn.metrics import (
-    classification_report,
-    confusion_matrix,
-    ConfusionMatrixDisplay,
-    accuracy_score,
-    precision_score,
-    recall_score,
-    f1_score
+    classification_report, confusion_matrix, ConfusionMatrixDisplay,
+    accuracy_score, precision_score, recall_score, f1_score,
 )
 
-from data_loader import get_datasets
+from config import MODEL_PATH
+from data_loader import get_datasets, load_class_names
 
-
-# CONFIGURATION
-
-MODEL_PATH = "models/mobilenetv2_stage1_final.keras"
-
-NUM_CLASSES = 28
-
-# Use the SAME class order as preprocessing
-CLASS_NAMES = [
-    "A", "B", "C", "D", "E", "F", "G",
-    "H", "I", "J", "K", "L", "M", "N",
-    "O", "P", "Q", "R", "S", "T", "U",
-    "V", "W", "X", "Y", "Z",
-    "nothing",
-    "space"
-]
-
-
-# CHECK CLASS COUNT
+OUT_DIR = os.path.dirname(os.path.abspath(MODEL_PATH))
+os.makedirs(OUT_DIR, exist_ok=True)
+REPORT_PATH = os.path.join(OUT_DIR, "mobilenetv2_classification_report.txt")
+CM_PATH = os.path.join(OUT_DIR, "mobilenetv2_confusion_matrix.png")
+CM_NORM_PATH = os.path.join(OUT_DIR, "mobilenetv2_confusion_matrix_normalized.png")
+CURVES_PATH = os.path.join(OUT_DIR, "mobilenetv2_training_curves.png")
+HISTORY_PATH = os.path.join(OUT_DIR, "training_history.json")   # written by train_model.py
 
 print("=" * 60)
 print("MOBILENETV2 MODEL EVALUATION")
 print("=" * 60)
 
-print(f"\nNumber of classes: {len(CLASS_NAMES)}")
+# ---------------- LOAD DATA AND MODEL ----------------
+_, _, test_ds = get_datasets()
+CLASS_NAMES = list(load_class_names())
+NUM_CLASSES = len(CLASS_NAMES)
+print(f"Classes: {NUM_CLASSES}")
 
-if len(CLASS_NAMES) != NUM_CLASSES:
+model = tf.keras.models.load_model(MODEL_PATH)
+print(f"Model input : {model.input_shape}")
+print(f"Model output: {model.output_shape}")
+
+if model.output_shape[-1] != NUM_CLASSES:
     raise ValueError(
-        f"Expected {NUM_CLASSES} classes, "
-        f"but found {len(CLASS_NAMES)}."
+        f"Model has {model.output_shape[-1]} outputs but the dataset has {NUM_CLASSES} "
+        "classes. Retrain the model with train_model.py."
     )
 
+# ---------------- OFFICIAL KERAS EVALUATION ----------------
+test_loss, test_acc = model.evaluate(test_ds, verbose=1)
+print(f"\nTest loss    : {test_loss:.4f}")
+print(f"Test accuracy: {test_acc * 100:.2f}%")
 
-# LOAD DATASETS
-
-print("\nLoading datasets...")
-
-train_ds, val_ds, test_ds = get_datasets()
-
-print("Datasets loaded successfully.")
-
-
-# LOAD TRAINED MODEL
-
-print("\nLoading trained MobileNetV2 model...")
-
-model = tf.keras.models.load_model(
-    MODEL_PATH
-)
-
-print("Model loaded successfully.")
-
-print("\nModel input shape:")
-print(model.input_shape)
-
-print("\nModel output shape:")
-print(model.output_shape)
-
-
-# EVALUATE ON TEST DATA
-
-print("\n" + "=" * 60)
-print("EVALUATING ON TEST DATA")
-print("=" * 60)
-
-test_loss, test_accuracy = model.evaluate(
-    test_ds,
-    verbose=1
-)
-
-print("\n" + "=" * 60)
-print("TEST RESULTS")
-print("=" * 60)
-
-print(f"Test Loss     : {test_loss:.4f}")
-print(f"Test Accuracy : {test_accuracy:.4f}")
-print(f"Test Accuracy : {test_accuracy * 100:.2f}%")
-
-
-# GENERATE PREDICTIONS
-
-print("\nGenerating predictions...")
-
-predictions = model.predict(
-    test_ds,
-    verbose=1
-)
-
-predicted_labels = np.argmax(
-    predictions,
-    axis=1
-)
-
-
-# GET TRUE LABELS
-
-true_labels = []
-
+# ---------------- PREDICTIONS (single pass, order always matches) ----------------
+true_labels, pred_labels = [], []
 for images, labels in test_ds:
-
-    # Labels are one-hot encoded
+    probs = model(images, training=False).numpy()
     labels = labels.numpy()
-
-    batch_labels = np.argmax(
-        labels,
-        axis=1
-    )
-
-    true_labels.extend(
-        batch_labels
-    )
+    if labels.ndim > 1:                      # one-hot -> index
+        labels = np.argmax(labels, axis=1)
+    pred_labels.extend(np.argmax(probs, axis=1))
+    true_labels.extend(labels)
 
 true_labels = np.array(true_labels)
+pred_labels = np.array(pred_labels)
+print(f"\nTest samples: {len(true_labels)}")
 
+# ---------------- METRICS ----------------
+accuracy = accuracy_score(true_labels, pred_labels)
+precision = precision_score(true_labels, pred_labels, average="weighted", zero_division=0)
+recall = recall_score(true_labels, pred_labels, average="weighted", zero_division=0)
+f1 = f1_score(true_labels, pred_labels, average="weighted", zero_division=0)
 
-# CHECK PREDICTION COUNT
-
-print("\nNumber of test samples:")
-print(len(true_labels))
-
-print("\nNumber of predictions:")
-print(len(predicted_labels))
-
-
-if len(true_labels) != len(predicted_labels):
-
-    raise ValueError(
-        "Number of labels and predictions do not match."
-    )
-
-
-# CALCULATE METRICS
-
-accuracy = accuracy_score(
-    true_labels,
-    predicted_labels
-)
-
-precision = precision_score(
-    true_labels,
-    predicted_labels,
-    average="weighted",
-    zero_division=0
-)
-
-recall = recall_score(
-    true_labels,
-    predicted_labels,
-    average="weighted",
-    zero_division=0
-)
-
-f1 = f1_score(
-    true_labels,
-    predicted_labels,
-    average="weighted",
-    zero_division=0
-)
-
-
-# PRINT METRICS
+if abs(accuracy - test_acc) > 0.005:
+    print(f"\n[WARNING] sklearn accuracy ({accuracy:.4f}) differs from Keras "
+          f"accuracy ({test_acc:.4f}). Check the data pipeline for shuffling or "
+          "different preprocessing.")
 
 print("\n" + "=" * 60)
-print("PERFORMANCE METRICS")
+print("PERFORMANCE METRICS (weighted)")
 print("=" * 60)
-
-print(f"\nAccuracy  : {accuracy:.4f}")
-print(f"Accuracy  : {accuracy * 100:.2f}%")
-
-print(f"\nPrecision : {precision:.4f}")
-print(f"Precision : {precision * 100:.2f}%")
-
-print(f"\nRecall    : {recall:.4f}")
-print(f"Recall    : {recall * 100:.2f}%")
-
-print(f"\nF1 Score  : {f1:.4f}")
-print(f"F1 Score  : {f1 * 100:.2f}%")
-
-
-# CLASSIFICATION REPORT
-
-print("\n" + "=" * 60)
-print("CLASSIFICATION REPORT")
-print("=" * 60)
+print(f"Accuracy : {accuracy * 100:.2f}%")
+print(f"Precision: {precision * 100:.2f}%")
+print(f"Recall   : {recall * 100:.2f}%")
+print(f"F1 score : {f1 * 100:.2f}%")
 
 report = classification_report(
-    true_labels,
-    predicted_labels,
+    true_labels, pred_labels,
     labels=list(range(NUM_CLASSES)),
     target_names=CLASS_NAMES,
-    zero_division=0
+    zero_division=0,
 )
+print("\n" + report)
 
-print(report)
+with open(REPORT_PATH, "w", encoding="utf-8") as f:
+    f.write("MobileNetV2 Classification Report\n" + "=" * 60 + "\n\n")
+    f.write(f"Test loss: {test_loss:.4f}\n")
+    f.write(f"Accuracy : {accuracy:.4f}\n")
+    f.write(f"Precision: {precision:.4f}\n")
+    f.write(f"Recall   : {recall:.4f}\n")
+    f.write(f"F1 score : {f1:.4f}\n\n")
+    f.write(report)
+print(f"Report saved to: {REPORT_PATH}")
 
-
-# SAVE CLASSIFICATION REPORT
-
-REPORT_PATH = (
-    "models/mobilenetv2_classification_report.txt"
-)
-
-with open(REPORT_PATH, "w") as file:
-
-    file.write(
-        "MobileNetV2 Classification Report\n"
-    )
-
-    file.write("=" * 60 + "\n\n")
-
-    file.write(
-        f"Test Loss: {test_loss:.4f}\n"
-    )
-
-    file.write(
-        f"Test Accuracy: {accuracy:.4f}\n"
-    )
-
-    file.write(
-        f"Precision: {precision:.4f}\n"
-    )
-
-    file.write(
-        f"Recall: {recall:.4f}\n"
-    )
-
-    file.write(
-        f"F1 Score: {f1:.4f}\n\n"
-    )
-
-    file.write(report)
+# ---------------- CONFUSION MATRICES ----------------
+labels_idx = list(range(NUM_CLASSES))
+cm = confusion_matrix(true_labels, pred_labels, labels=labels_idx)
 
 
-print(
-    f"\nClassification report saved to:\n"
-    f"{REPORT_PATH}"
-)
+def save_confusion_matrix(matrix, path, title, values_format):
+    fig, ax = plt.subplots(figsize=(16, 14))
+    ConfusionMatrixDisplay(matrix, display_labels=CLASS_NAMES).plot(
+        ax=ax, xticks_rotation=90, values_format=values_format, colorbar=True)
+    ax.set_title(title)
+    fig.tight_layout()
+    fig.savefig(path, dpi=200, bbox_inches="tight")
+    if SHOW_PLOTS:
+        plt.show()
+    plt.close(fig)
+    print(f"Saved: {path}")
 
 
-# CONFUSION MATRIX
+save_confusion_matrix(cm, CM_PATH, "MobileNetV2 - confusion matrix (counts)", "d")
 
-print("\nGenerating confusion matrix...")
+row_sums = cm.sum(axis=1, keepdims=True)
+cm_norm = np.divide(cm, row_sums, out=np.zeros_like(cm, dtype=float), where=row_sums != 0)
+save_confusion_matrix(cm_norm, CM_NORM_PATH,
+                      "MobileNetV2 - confusion matrix (share of each true class)", ".2f")
 
-cm = confusion_matrix(
-    true_labels,
-    predicted_labels,
-    labels=list(range(NUM_CLASSES))
-)
+# ---------------- MOST CONFUSED PAIRS ----------------
+off_diag = cm.copy()
+np.fill_diagonal(off_diag, 0)
+pairs = [(off_diag[i, j], i, j) for i in range(NUM_CLASSES)
+         for j in range(NUM_CLASSES) if off_diag[i, j] > 0]
+pairs.sort(reverse=True)
 
-fig, ax = plt.subplots(
-    figsize=(16, 14)
-)
+print("\nMost confused pairs (true -> predicted):")
+if not pairs:
+    print("  none, no mistakes on the test set")
+for count, i, j in pairs[:10]:
+    print(f"  {CLASS_NAMES[i]:>8} -> {CLASS_NAMES[j]:<8} {count} times")
 
-display = ConfusionMatrixDisplay(
-    confusion_matrix=cm,
-    display_labels=CLASS_NAMES
-)
-
-display.plot(
-    ax=ax,
-    xticks_rotation=90,
-    values_format="d"
-)
-
-plt.title(
-    "MobileNetV2 - Sign Language Confusion Matrix"
-)
-
-plt.tight_layout()
-
-
-CONFUSION_PATH = (
-    "models/mobilenetv2_confusion_matrix.png"
-)
-
-plt.savefig(
-    CONFUSION_PATH,
-    dpi=300,
-    bbox_inches="tight"
-)
-
-plt.show()
-
-print(
-    f"\nConfusion matrix saved to:\n"
-    f"{CONFUSION_PATH}"
-)
-
-
-# FINAL SUMMARY
+# ---------------- OPTIONAL: TRAINING CURVES ----------------
+# In train_model.py, after training, add:
+#     json.dump(history.history, open("models/training_history.json", "w"))
+# (if you fine-tune, merge both histories' lists before saving)
+if os.path.exists(HISTORY_PATH):
+    with open(HISTORY_PATH) as f:
+        hist = json.load(f)
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    for ax, key, name in zip(axes, ("accuracy", "loss"), ("Accuracy", "Loss")):
+        if key in hist:
+            ax.plot(hist[key], label="train")
+        if f"val_{key}" in hist:
+            ax.plot(hist[f"val_{key}"], label="validation")
+        ax.set_title(name)
+        ax.set_xlabel("Epoch")
+        ax.legend()
+    fig.tight_layout()
+    fig.savefig(CURVES_PATH, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved: {CURVES_PATH}")
+else:
+    print(f"\n[Info] No training history at {HISTORY_PATH}; skipping training curves.")
 
 print("\n" + "=" * 60)
 print("EVALUATION COMPLETE")
 print("=" * 60)
-
-print(f"\nTest Accuracy : {accuracy * 100:.2f}%")
-print(f"Precision     : {precision * 100:.2f}%")
-print(f"Recall        : {recall * 100:.2f}%")
-print(f"F1 Score      : {f1 * 100:.2f}%")
-
-print("\nGenerated files:")
-print("- models/mobilenetv2_classification_report.txt")
-print("- models/mobilenetv2_confusion_matrix.png")
-
-print("\nDone!")

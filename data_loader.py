@@ -1,255 +1,101 @@
+"""Load the JSON-manifest dataset produced by preprocess_data.py."""
+
+import json
 import os
-import pandas as pd
+
 import tensorflow as tf
 
-# CONFIGURATION
-
-PROCESSED_DATASET = "dataset/processed"
-
-TRAIN_CSV = "dataset/train.csv"
-VAL_CSV = "dataset/val.csv"
-TEST_CSV = "dataset/test.csv"
-
-IMG_SIZE = (128, 128)
-BATCH_SIZE = 32
-NUM_CLASSES = 28
-
-AUTOTUNE = tf.data.AUTOTUNE
-
-
-# LOAD CSV
-
-def load_csv(csv_path):
-    """
-    Reads the CSV file and returns:
-    - full image paths
-    - integer class labels
-    """
-
-    df = pd.read_csv(csv_path)
-
-    full_paths = [
-        os.path.join(PROCESSED_DATASET, rel_path)
-        for rel_path in df["filepath"]
-    ]
-
-    labels = df["class_index"].tolist()
-
-    return full_paths, labels
-
-
-# IMAGE LOADING + DECODING
-
-def load_and_decode_image(filepath, label):
-    """
-    Loads an image, converts it to RGB, resizes it,
-    and keeps pixel values in the 0-255 range.
-
-    MobileNetV2 preprocessing is handled inside model.py.
-    """
-
-    image = tf.io.read_file(filepath)
-
-    image = tf.image.decode_jpeg(
-        image,
-        channels=3
-    )
-
-    image = tf.image.resize(
-        image,
-        IMG_SIZE
-    )
-
-    # Keep pixel values in 0-255 range.
-    image = tf.cast(
-        image,
-        tf.float32
-    )
-
-    # Convert integer label to one-hot vector.
-    label = tf.one_hot(
-        label,
-        depth=NUM_CLASSES
-    )
-
-    return image, label
-
-
-# AUGMENTATION
-
-_rotation_layer = tf.keras.layers.RandomRotation(
-    factor=0.03
+from config import (
+    BATCH_SIZE,
+    CHANNELS,
+    DATASET_MANIFEST_PATH,
+    IMG_SIZE,
+    PROCESSED_DIR,
 )
 
 
-def augment_image(image, label):
-
-    # Horizontal flip DISABLED
-
-    image = tf.image.random_brightness(
-        image,
-        max_delta=38.25
-    )
-
-    # Random contrast
-
-    image = tf.image.random_contrast(
-        image,
-        lower=0.85,
-        upper=1.15
-    )
-
-    # Small rotation
-
-    image = _rotation_layer(
-        image,
-        training=True
-    )
-
-    # Keep pixels in valid 0-255 range
-
-    image = tf.clip_by_value(
-        image,
-        0.0,
-        255.0
-    )
-
-    return image, label
-
-
-# BUILD DATASET
-
-def build_dataset(
-    csv_path,
-    batch_size=BATCH_SIZE,
-    augment=False,
-    shuffle=False
-):
-
-    filepaths, labels = load_csv(csv_path)
-
-    dataset = tf.data.Dataset.from_tensor_slices(
-        (filepaths, labels)
-    )
-
-    # Shuffle training data only.
-    if shuffle:
-        dataset = dataset.shuffle(
-            buffer_size=len(filepaths),
-            seed=42
+def load_dataset_manifest():
+    """Read and validate the processed dataset manifest."""
+    if not os.path.isfile(DATASET_MANIFEST_PATH):
+        raise FileNotFoundError(
+            f"Dataset manifest not found at '{DATASET_MANIFEST_PATH}'. "
+            "Run preprocess_data.py first."
         )
 
-    # Load images.
-    dataset = dataset.map(
-        load_and_decode_image,
-        num_parallel_calls=AUTOTUNE
-    )
+    with open(DATASET_MANIFEST_PATH, "r", encoding="utf-8") as manifest_file:
+        manifest = json.load(manifest_file)
 
-    # Apply augmentation to training data only.
-    if augment:
-        dataset = dataset.map(
-            augment_image,
-            num_parallel_calls=AUTOTUNE
+    classes = manifest.get("classes")
+    if not isinstance(classes, list) or len(classes) < 2:
+        raise ValueError("The dataset manifest must contain at least two classes.")
+    if manifest.get("num_classes") != len(classes):
+        raise ValueError("Manifest num_classes does not match its classes list.")
+
+    image_size = manifest.get("image_size")
+    if image_size != [IMG_SIZE, IMG_SIZE]:
+        raise ValueError(
+            f"Manifest image_size {image_size} does not match configured size "
+            f"[{IMG_SIZE}, {IMG_SIZE}]."
         )
 
-    # Create batches.
-    dataset = dataset.batch(
-        batch_size
-    )
+    return manifest
 
-    # Improve pipeline performance.
-    dataset = dataset.prefetch(
-        AUTOTUNE
-    )
 
-    return dataset
+def load_class_names():
+    """Return class names in the label-index order used during training."""
+    return load_dataset_manifest()["classes"]
 
-# GET TRAIN / VALIDATION / TEST DATASETS
 
-def get_datasets():
+def get_datasets(batch_size=BATCH_SIZE):
+    """Build batched TensorFlow datasets from the train/val/test JSON records."""
+    manifest = load_dataset_manifest()
+    classes = manifest["classes"]
+    num_classes = len(classes)
+    processed_root = os.path.abspath(PROCESSED_DIR)
+    datasets = []
 
-    train_ds = build_dataset(
-        TRAIN_CSV,
-        augment=True,
-        shuffle=True
-    )
+    for split_name in ("train", "val", "test"):
+        records = manifest.get("splits", {}).get(split_name)
+        if not isinstance(records, list) or not records:
+            raise ValueError(f"The '{split_name}' split is missing or empty in the manifest.")
 
-    val_ds = build_dataset(
-        VAL_CSV,
-        augment=False,
-        shuffle=False
-    )
+        image_paths = []
+        labels = []
+        for record in records:
+            label = record.get("label")
+            class_name = record.get("class_name")
+            image_path = record.get("image")
+            if not isinstance(label, int) or not 0 <= label < num_classes:
+                raise ValueError(f"Invalid label in '{split_name}' record: {record}")
+            if classes[label] != class_name:
+                raise ValueError(f"Class/label mismatch in '{split_name}' record: {record}")
+            if not isinstance(image_path, str):
+                raise ValueError(f"Missing image path in '{split_name}' record: {record}")
 
-    test_ds = build_dataset(
-        TEST_CSV,
-        augment=False,
-        shuffle=False
-    )
+            absolute_path = os.path.abspath(os.path.join(processed_root, image_path))
+            if os.path.commonpath((processed_root, absolute_path)) != processed_root:
+                raise ValueError(f"Image path escapes the processed dataset: {image_path}")
+            image_paths.append(absolute_path)
+            labels.append(label)
 
-    return train_ds, val_ds, test_ds
+        dataset = tf.data.Dataset.from_tensor_slices((image_paths, labels))
+        if split_name == "train":
+            dataset = dataset.shuffle(
+                buffer_size=len(image_paths),
+                seed=42,
+                reshuffle_each_iteration=True,
+            )
 
-# SANITY CHECK
+        def decode_image(path, label):
+            image_bytes = tf.io.read_file(path)
+            image = tf.io.decode_jpeg(image_bytes, channels=CHANNELS)
+            image = tf.image.resize(image, (IMG_SIZE, IMG_SIZE))
+            image = tf.cast(image, tf.float32)
+            label = tf.one_hot(label, depth=num_classes)
+            return image, label
 
-if __name__ == "__main__":
+        dataset = dataset.map(decode_image, num_parallel_calls=tf.data.AUTOTUNE)
+        dataset = dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+        datasets.append(dataset)
 
-    train_ds, val_ds, test_ds = get_datasets()
-
-    print("=" * 60)
-    print("DATA LOADER SANITY CHECK")
-    print("=" * 60)
-
-    # Training batch
-
-    for images, labels in train_ds.take(1):
-
-        print(
-            f"\nTrain batch image shape : {images.shape}"
-        )
-
-        print(
-            f"Train batch label shape : {labels.shape}"
-        )
-
-        print(
-            f"Train pixel range       : "
-            f"[{tf.reduce_min(images):.3f}, "
-            f"{tf.reduce_max(images):.3f}]"
-        )
-
-    # Validation batch
-
-    for images, labels in val_ds.take(1):
-
-        print(
-            f"\nVal batch image shape   : {images.shape}"
-        )
-
-        print(
-            f"Val batch label shape   : {labels.shape}"
-        )
-
-        print(
-            f"Val pixel range         : "
-            f"[{tf.reduce_min(images):.3f}, "
-            f"{tf.reduce_max(images):.3f}]"
-        )
-
-    # Test batch
-
-    for images, labels in test_ds.take(1):
-
-        print(
-            f"\nTest batch image shape  : {images.shape}"
-        )
-
-        print(
-            f"Test batch label shape  : {labels.shape}"
-        )
-
-        print(
-            f"Test pixel range        : "
-            f"[{tf.reduce_min(images):.3f}, "
-            f"{tf.reduce_max(images):.3f}]"
-        )
-
-    print("\nData loader working correctly.")
+    return tuple(datasets)

@@ -1,107 +1,72 @@
 import tensorflow as tf
-from tensorflow.keras import layers, Model
-from tensorflow.keras.applications import MobileNetV2
+from tensorflow.keras import layers, models
+from config import IMG_SIZE, CHANNELS, LEARNING_RATE
 
+def build_mobilenetv2_model(num_classes: int, freeze_base: bool = True) -> tf.keras.Model:
 
-# CONFIGURATION
-
-IMG_SIZE = (128, 128)
-NUM_CLASSES = 28
-
-
-# BUILD MODEL
-
-def build_model():
-
-    # Load pretrained MobileNetV2
-    base_model = MobileNetV2(
-        input_shape=(*IMG_SIZE, 3),
+    input_shape = (IMG_SIZE, IMG_SIZE, CHANNELS)
+    
+    # 1. Base Pretrained Backbone (MobileNetV2 without top classifier)
+    base_model = tf.keras.applications.MobileNetV2(
+        input_shape=input_shape,
         include_top=False,
-        weights="imagenet"
+        weights='imagenet'
     )
-
-    # Freeze MobileNetV2 for Stage 1 training
-    base_model.trainable = False
-
-
-    # INPUT
-
-    inputs = layers.Input(
-        shape=(*IMG_SIZE, 3),
-        name="input_image"
+    
+    # Freeze feature extractor layers during initial training
+    base_model.trainable = not freeze_base
+    
+    # 2. Input and Preprocessing layer (scales inputs from [0, 255] to [-1, 1] as required by MobileNetV2)
+    inputs = tf.keras.Input(shape=input_shape)
+    x = tf.keras.applications.mobilenet_v2.preprocess_input(inputs)
+    
+    # 3. Backbone Feature Extraction
+    x = base_model(x, training=False)
+    
+    # 4. Custom Classification Head
+    x = layers.GlobalAveragePooling2D(name="global_avg_pool")(x)
+    x = layers.BatchNormalization(name="batch_norm_1")(x)
+    x = layers.Dense(256, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(1e-4), name="dense_1")(x)
+    x = layers.Dropout(0.35, name="dropout_1")(x)
+    x = layers.Dense(128, activation='relu', name="dense_2")(x)
+    x = layers.Dropout(0.2, name="dropout_2")(x)
+    
+    # Softmax output layer
+    outputs = layers.Dense(num_classes, activation='softmax', name="predictions")(x)
+    
+    model = models.Model(inputs=inputs, outputs=outputs, name="SignLanguage_MobileNetV2")
+    
+    # 5. Compile with Adam optimizer & Categorical Crossentropy
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=LEARNING_RATE),
+        loss='categorical_crossentropy',
+        metrics=['accuracy']
     )
-
-
-    # MOBILE NET V2 PREPROCESSING
-
-    x = tf.keras.applications.mobilenet_v2.preprocess_input(
-        inputs
-    )
-
-
-    # MOBILE NET V2 FEATURE EXTRACTION
-
-    x = base_model(
-        x,
-        training=False
-    )
-
-
-    # CLASSIFICATION HEAD
-
-    x = layers.GlobalAveragePooling2D()(x)
-
-    x = layers.Dropout(0.30)(x)
-
-    outputs = layers.Dense(
-        NUM_CLASSES,
-        activation="softmax",
-        name="predictions"
-    )(x)
-
-
-    # CREATE MODEL
-
-    model = Model(
-        inputs=inputs,
-        outputs=outputs,
-        name="SignLanguage_MobileNetV2"
-    )
-
+    
     return model
 
-
-# CREATE MODEL
-
-model = build_model()
-
-
-# COMPILE MODEL
-
-model.compile(
-    optimizer=tf.keras.optimizers.Adam(
-        learning_rate=0.001
-    ),
-    loss="categorical_crossentropy",
-    metrics=["accuracy"]
-)
-
-
-# MODEL SUMMARY
-
-model.summary()
-
-
-# TEST MODEL
-
-if __name__ == "__main__":
-
-    print("\n" + "=" * 60)
-    print("MOBILENETV2 MODEL TEST")
-    print("=" * 60)
-
-    print(f"\nInput shape  : {model.input_shape}")
-    print(f"Output shape : {model.output_shape}")
-    print(f"Classes      : {NUM_CLASSES}")
-
-    print("\nModel created successfully.")
+def unfreeze_for_fine_tuning(model: tf.keras.Model, unfreeze_last_n: int = 30, fine_tune_lr: float = 1e-5):
+    """
+    Unfreezes the top N layers of the MobileNetV2 base model for fine-tuning.
+    """
+    base_model = None
+    for layer in model.layers:
+        if isinstance(layer, tf.keras.Model):
+            base_model = layer
+            break
+            
+    if base_model is None:
+        return model
+        
+    base_model.trainable = True
+    
+    # Freeze all layers except the last unfreeze_last_n layers
+    for layer in base_model.layers[:-unfreeze_last_n]:
+        layer.trainable = False
+        
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=fine_tune_lr),
+        loss='categorical_crossentropy',
+        metrics=['accuracy']
+    )
+    return model

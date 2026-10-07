@@ -1,195 +1,77 @@
+"""Train the sign classifier from the preprocessed JSON-manifest dataset."""
+
 import os
 import time
+
 import tensorflow as tf
-import matplotlib.pyplot as plt
 
-from data_loader import get_datasets
-from model import build_model
+from config import EPOCHS, FINE_TUNE_EPOCHS, MODEL_PATH, MODELS_DIR
+from data_loader import get_datasets, load_class_names
+from model import build_mobilenetv2_model, unfreeze_for_fine_tuning
 
-
-# CONFIGURATION
-
-EPOCHS = 20
-
-MODEL_DIR = "models"
-BEST_MODEL_PATH = os.path.join(
-    MODEL_DIR,
-    "best_mobilenetv2_stage1.keras"
-)
-
-FINAL_MODEL_PATH = os.path.join(
-    MODEL_DIR,
-    "mobilenetv2_stage1_final.keras"
-)
-
-os.makedirs(MODEL_DIR, exist_ok=True)
+BEST_MODEL_PATH = os.path.join(MODELS_DIR, "best_mobilenetv2_stage1.keras")
 
 
-# LOAD DATASETS
-
-train_ds, val_ds, test_ds = get_datasets()
-
-print("\nDatasets loaded successfully.")
-
-
-# BUILD MODEL
-
-model = build_model()
-
-model.compile(
-    optimizer=tf.keras.optimizers.Adam(
-        learning_rate=0.001
-    ),
-    loss="categorical_crossentropy",
-    metrics=["accuracy"]
-)
-
-model.summary()
-
-
-# CALLBACKS
-
-early_stopping = tf.keras.callbacks.EarlyStopping(
-    monitor="val_loss",
-    patience=5,
-    restore_best_weights=True,
-    verbose=1
-)
-
-
-model_checkpoint = tf.keras.callbacks.ModelCheckpoint(
-    BEST_MODEL_PATH,
-    monitor="val_accuracy",
-    mode="max",
-    save_best_only=True,
-    verbose=1
-)
-
-
-reduce_lr = tf.keras.callbacks.ReduceLROnPlateau(
-    monitor="val_loss",
-    factor=0.2,
-    patience=2,
-    min_lr=1e-6,
-    verbose=1
-)
-
-
-# TRAIN MODEL
-
-start_time = time.time()
-
-history = model.fit(
-    train_ds,
-    validation_data=val_ds,
-    epochs=EPOCHS,
-    callbacks=[
-        early_stopping,
-        model_checkpoint,
-        reduce_lr
+def make_callbacks():
+    return [
+        tf.keras.callbacks.ModelCheckpoint(
+            BEST_MODEL_PATH,
+            monitor="val_accuracy",
+            mode="max",
+            save_best_only=True,
+            verbose=1,
+        ),
+        tf.keras.callbacks.EarlyStopping(
+            monitor="val_loss",
+            patience=5,
+            restore_best_weights=True,
+            verbose=1,
+        ),
+        tf.keras.callbacks.ReduceLROnPlateau(
+            monitor="val_loss",
+            factor=0.2,
+            patience=2,
+            min_lr=1e-6,
+            verbose=1,
+        ),
     ]
-)
-
-training_time = time.time() - start_time
 
 
-# SAVE FINAL MODEL
+def main():
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    classes = load_class_names()
+    train_ds, val_ds, test_ds = get_datasets()
 
-model.save(FINAL_MODEL_PATH)
+    print(f"Training with {len(classes)} classes: {classes}")
+    model = build_mobilenetv2_model(num_classes=len(classes), freeze_base=True)
+    model.summary()
 
-print("\n" + "=" * 60)
-print("TRAINING COMPLETE")
-print("=" * 60)
+    start_time = time.time()
+    print("\n--- Stage 1: train the classification head ---")
+    model.fit(
+        train_ds,
+        validation_data=val_ds,
+        epochs=EPOCHS,
+        callbacks=make_callbacks(),
+        shuffle=False,
+    )
 
-print(f"\nTraining time: {training_time / 60:.2f} minutes")
+    print("\n--- Stage 2: fine-tune the MobileNetV2 backbone ---")
+    model = unfreeze_for_fine_tuning(model, unfreeze_last_n=35, fine_tune_lr=1e-5)
+    model.fit(
+        train_ds,
+        validation_data=val_ds,
+        epochs=FINE_TUNE_EPOCHS,
+        callbacks=make_callbacks(),
+        shuffle=False,
+    )
 
-print(f"\nBest model saved at:")
-print(BEST_MODEL_PATH)
-
-print(f"\nFinal model saved at:")
-print(FINAL_MODEL_PATH)
-
-
-# TRAINING RESULTS
-
-train_accuracy = history.history["accuracy"]
-val_accuracy = history.history["val_accuracy"]
-
-train_loss = history.history["loss"]
-val_loss = history.history["val_loss"]
-
-best_epoch = (
-    max(
-        range(len(val_accuracy)),
-        key=lambda i: val_accuracy[i]
-    ) + 1
-)
-
-best_val_accuracy = max(val_accuracy)
-
-print("\n" + "=" * 60)
-print("TRAINING SUMMARY")
-print("=" * 60)
-
-print(f"\nBest epoch          : {best_epoch}")
-print(f"Best validation acc : {best_val_accuracy:.4f}")
+    model.save(MODEL_PATH)
+    test_loss, test_accuracy = model.evaluate(test_ds, verbose=1)
+    print(f"\nTraining finished in {(time.time() - start_time) / 60:.1f} minutes.")
+    print(f"Final model saved to: {MODEL_PATH}")
+    print(f"Test loss: {test_loss:.4f}; test accuracy: {test_accuracy:.4f}")
 
 
-# PLOT ACCURACY
-
-plt.figure(figsize=(8, 5))
-
-plt.plot(
-    train_accuracy,
-    label="Training Accuracy"
-)
-
-plt.plot(
-    val_accuracy,
-    label="Validation Accuracy"
-)
-
-plt.title("MobileNetV2 Training and Validation Accuracy")
-plt.xlabel("Epoch")
-plt.ylabel("Accuracy")
-plt.legend()
-plt.grid(True)
-
-plt.tight_layout()
-
-plt.savefig(
-    "models/mobilenetv2_accuracy.png",
-    dpi=150
-)
-
-plt.show()
-
-
-# PLOT LOSS
-
-plt.figure(figsize=(8, 5))
-
-plt.plot(
-    train_loss,
-    label="Training Loss"
-)
-
-plt.plot(
-    val_loss,
-    label="Validation Loss"
-)
-
-plt.title("MobileNetV2 Training and Validation Loss")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.legend()
-plt.grid(True)
-
-plt.tight_layout()
-
-plt.savefig(
-    "models/mobilenetv2_loss.png",
-    dpi=150
-)
-
-plt.show()
+if __name__ == "__main__":
+    main()
