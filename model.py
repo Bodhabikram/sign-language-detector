@@ -18,7 +18,7 @@ def build_mobilenetv2_model(num_classes: int, freeze_base: bool = True) -> tf.ke
     
     # 2. Input and Preprocessing layer (scales inputs from [0, 255] to [-1, 1] as required by MobileNetV2)
     inputs = tf.keras.Input(shape=input_shape)
-    x = tf.keras.applications.mobilenet_v2.preprocess_input(inputs)
+    x = layers.Rescaling(1.0 / 127.5, offset=-1.0, name="mnv2_preprocess")(inputs)
     
     # 3. Backbone Feature Extraction
     x = base_model(x, training=False)
@@ -46,9 +46,7 @@ def build_mobilenetv2_model(num_classes: int, freeze_base: bool = True) -> tf.ke
     return model
 
 def unfreeze_for_fine_tuning(model: tf.keras.Model, unfreeze_last_n: int = 30, fine_tune_lr: float = 1e-5):
-    """
-    Unfreezes the top N layers of the MobileNetV2 base model for fine-tuning.
-    """
+
     base_model = None
     for layer in model.layers:
         if isinstance(layer, tf.keras.Model):

@@ -46,15 +46,36 @@ def load_class_names():
     return load_dataset_manifest()["classes"]
 
 
-def get_datasets(batch_size=BATCH_SIZE):
-    """Build batched TensorFlow datasets from the train/val/test JSON records."""
+def augment_image(image, size):
+    """Apply geometry and photometric augmentation suitable for hand signs."""
+    padding = size // 10
+    padded = tf.pad(
+        image, [[padding, padding], [padding, padding], [0, 0]], mode="REFLECT"
+    )
+    crop_size = tf.random.uniform(
+        [], int(size * 0.85), size + 1, dtype=tf.int32
+    )
+    max_offset = 2 * padding + size - crop_size
+    offset_y = tf.random.uniform([], 0, max_offset + 1, dtype=tf.int32)
+    offset_x = tf.random.uniform([], 0, max_offset + 1, dtype=tf.int32)
+    image = tf.image.crop_to_bounding_box(
+        padded, offset_y, offset_x, crop_size, crop_size
+    )
+    image = tf.image.resize(image, (size, size))
+    image = tf.image.random_brightness(image, 15.0)
+    image = tf.image.random_contrast(image, 0.85, 1.15)
+    return tf.clip_by_value(image, 0.0, 255.0)
+
+
+def get_datasets(batch_size=BATCH_SIZE, augment_train=False):
+    """Build batched TensorFlow datasets from the train/validation records."""
     manifest = load_dataset_manifest()
     classes = manifest["classes"]
     num_classes = len(classes)
     processed_root = os.path.abspath(PROCESSED_DIR)
     datasets = []
 
-    for split_name in ("train", "val", "test"):
+    for split_name in ("train", "val"):
         records = manifest.get("splits", {}).get(split_name)
         if not isinstance(records, list) or not records:
             raise ValueError(f"The '{split_name}' split is missing or empty in the manifest.")
@@ -86,11 +107,15 @@ def get_datasets(batch_size=BATCH_SIZE):
                 reshuffle_each_iteration=True,
             )
 
-        def decode_image(path, label):
+        should_augment = augment_train and split_name == "train"
+
+        def decode_image(path, label, augment=should_augment):
             image_bytes = tf.io.read_file(path)
             image = tf.io.decode_jpeg(image_bytes, channels=CHANNELS)
             image = tf.image.resize(image, (IMG_SIZE, IMG_SIZE))
             image = tf.cast(image, tf.float32)
+            if augment:
+                image = augment_image(image, IMG_SIZE)
             label = tf.one_hot(label, depth=num_classes)
             return image, label
 

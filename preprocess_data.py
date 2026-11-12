@@ -7,13 +7,20 @@ import shutil
 import argparse
 import numpy as np
 
-from config import MODELS_DIR, LABELS_PATH, IMG_SIZE, BOX_PADDING
+from config import (
+    BOX_PADDING,
+    LABELS_PATH,
+    MODELS_DIR,
+    PROCESSED_DIR,
+    RAW_ASL_DIR,
+    IMG_SIZE,
+)
 
-# Default directory configurations targeting dataset/raw_asl
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_RAW_DIR = os.path.join(BASE_DIR, "dataset", "raw_asl")
-DEFAULT_PROCESSED_DIR = os.path.join(BASE_DIR, "dataset", "processed")
+# Default paths are centralized in config.py so scripts share one layout.
+DEFAULT_RAW_DIR = RAW_ASL_DIR
+DEFAULT_PROCESSED_DIR = PROCESSED_DIR
 CLASS_WEIGHTS_PATH = os.path.join(MODELS_DIR, "class_weights.json")
+BOX_PADDING_RATIO = 0.25
 
 
 # =====================================================================
@@ -43,6 +50,55 @@ def check_image_quality(img_bgr, min_blur_var=60.0, min_brightness=25.0, max_bri
         return False, f"Too bright / overexposed ({avg_brightness:.1f} > {max_brightness})"
 
     return True, "Valid"
+
+
+def get_hand_crop(img_bgr, hand_landmarks, padding_ratio=BOX_PADDING_RATIO):
+    """Return a padded, square crop around MediaPipe hand landmarks."""
+    landmarks = hand_landmarks.landmark
+    height, width = img_bgr.shape[:2]
+    x_coords = [point.x * width for point in landmarks]
+    y_coords = [point.y * height for point in landmarks]
+    x_min, x_max = min(x_coords), max(x_coords)
+    y_min, y_max = min(y_coords), max(y_coords)
+    pad_x = (x_max - x_min) * padding_ratio
+    pad_y = (y_max - y_min) * padding_ratio
+    x_min -= pad_x
+    x_max += pad_x
+    y_min -= pad_y
+    y_max += pad_y
+    side = max(x_max - x_min, y_max - y_min)
+    center_x = (x_min + x_max) / 2
+    center_y = (y_min + y_max) / 2
+    left = max(0, int(center_x - side / 2))
+    top = max(0, int(center_y - side / 2))
+    right = min(width, int(center_x + side / 2))
+    bottom = min(height, int(center_y + side / 2))
+    if right <= left or bottom <= top:
+        return None
+    return img_bgr[top:bottom, left:right]
+
+
+class HandCropper:
+    """Crop frames to the padded hand box used by the live application."""
+
+    def __init__(self, min_detection_confidence=0.6):
+        import mediapipe as mp
+
+        self.hands = mp.solutions.hands.Hands(
+            static_image_mode=True,
+            max_num_hands=1,
+            min_detection_confidence=min_detection_confidence,
+            min_tracking_confidence=0.6,
+        )
+
+    def crop(self, img_bgr):
+        results = self.hands.process(cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB))
+        if not results.multi_hand_landmarks:
+            return None
+        return get_hand_crop(img_bgr, results.multi_hand_landmarks[0])
+
+    def close(self):
+        self.hands.close()
 
 
 # =====================================================================
@@ -151,7 +207,7 @@ def augment_image(img_bgr):
 # =====================================================================
 # 5. LABELLING, QUALITY SCREENING & STRATIFIED SPLIT
 # =====================================================================
-def scan_and_label_dataset(raw_dir=DEFAULT_RAW_DIR):
+def scan_and_label_dataset(raw_dir=DEFAULT_RAW_DIR, max_per_class=None, seed=42):
    
     if not os.path.exists(raw_dir):
         raise FileNotFoundError(f"Raw data directory '{raw_dir}' not found. Please verify the folder exists.")
@@ -176,7 +232,13 @@ def scan_and_label_dataset(raw_dir=DEFAULT_RAW_DIR):
         image_files = glob.glob(os.path.join(cls_folder, "*.[jJ][pP][gG]")) + \
                       glob.glob(os.path.join(cls_folder, "*.[pP][nN][gG]")) + \
                       glob.glob(os.path.join(cls_folder, "*.[jJ][pP][eE][gG]"))
-        
+        image_files = sorted(image_files)
+        if max_per_class is not None and len(image_files) > max_per_class:
+            sampling_rng = random.Random(seed)
+            sampling_rng.shuffle(image_files)
+            image_files = image_files[:max_per_class]
+            image_files.sort()
+
         cls_accepted = 0
         for p in image_files:
             discarded_stats["total_scanned"] += 1
@@ -195,35 +257,32 @@ def scan_and_label_dataset(raw_dir=DEFAULT_RAW_DIR):
     return valid_samples, classes, class_to_idx
 
 
-def stratified_split(samples, train_ratio=0.70, val_ratio=0.15, test_ratio=0.15, seed=42):
+def stratified_split(samples, train_ratio=0.80, seed=42):
     
     rng = random.Random(seed)
     by_class = {}
     for sample in samples:
         by_class.setdefault(sample[1], []).append(sample)
 
-    train_set, val_set, test_set = [], [], []
+    if not 0 < train_ratio < 1:
+        raise ValueError("train_ratio must be between 0 and 1.")
+
+    train_set, val_set = [], []
 
     for cls, items in by_class.items():
         rng.shuffle(items)
         n = len(items)
         n_train = int(n * train_ratio)
-        n_val = int(n * val_ratio)
-
         train_set.extend(items[:n_train])
-        val_set.extend(items[n_train:n_train + n_val])
-        test_set.extend(items[n_train + n_val:])
+        val_set.extend(items[n_train:])
 
     rng.shuffle(train_set)
     rng.shuffle(val_set)
-    rng.shuffle(test_set)
-
     print(f"\n[Splits] Stratified Split:")
     print(f"  - Train: {len(train_set)} samples ({train_ratio*100:.0f}%)")
-    print(f"  - Validation: {len(val_set)} samples ({val_ratio*100:.0f}%)")
-    print(f"  - Test: {len(test_set)} samples ({test_ratio*100:.0f}%)")
+    print(f"  - Validation: {len(val_set)} samples ({(1 - train_ratio)*100:.0f}%)")
 
-    return train_set, val_set, test_set
+    return train_set, val_set
 
 
 # =====================================================================
@@ -257,7 +316,8 @@ def compute_and_save_class_weights(train_samples, num_classes, save_path=None):
 # 7. EXPORT PREPROCESSED DATASET TO DISK
 # =====================================================================
 def build_processed_dataset(raw_dir=DEFAULT_RAW_DIR, output_dir=DEFAULT_PROCESSED_DIR,
-                            augment_train=True, target_per_class=None, tracker=None):
+                            augment_train=True, target_per_class=None, tracker=None,
+                            max_per_class=None, crop_hands=False):
     
     print(f"Starting ASL dataset preprocessing from:\n -> Source: {raw_dir}\n -> Destination: {output_dir}\n")
     raw_abs = os.path.normcase(os.path.abspath(raw_dir))
@@ -266,86 +326,102 @@ def build_processed_dataset(raw_dir=DEFAULT_RAW_DIR, output_dir=DEFAULT_PROCESSE
     if common_path in (raw_abs, output_abs):
         raise ValueError("The output directory must be separate from the raw dataset directory.")
 
-    samples, classes, class_to_idx = scan_and_label_dataset(raw_dir)
+    samples, classes, class_to_idx = scan_and_label_dataset(
+        raw_dir,
+        max_per_class=max_per_class,
+    )
     num_classes = len(classes)
 
     if not samples:
         print(f"[Warning] No valid images found in '{raw_dir}'. Please ensure your gesture images are located inside '{raw_dir}/<class_name>/'.")
         return
 
-    train_set, val_set, test_set = stratified_split(samples, 0.70, 0.15, 0.15)
+    train_set, val_set = stratified_split(samples, train_ratio=0.80)
     compute_and_save_class_weights(train_set, num_classes)
 
     partitions = {
         "train": train_set,
         "val": val_set,
-        "test": test_set
     }
 
     print(f"\n[Processing] Writing preprocessed dataset to: {output_dir}")
     if os.path.exists(output_dir):
         shutil.rmtree(output_dir)
 
+    cropper = HandCropper() if crop_hands else None
+    skipped_no_hand = 0
     manifest_splits = {split_name: [] for split_name in partitions}
 
-    for split_name, split_samples in partitions.items():
-        is_train = (split_name == "train")
-        print(f"  Processing '{split_name}' split ({len(split_samples)} samples)...")
+    try:
+        for split_name, split_samples in partitions.items():
+            is_train = (split_name == "train")
+            print(f"  Processing '{split_name}' split ({len(split_samples)} samples)...")
 
-        # Track count per class for training oversampling/balancing
-        class_counts = {}
+            # Track count per class for training oversampling/balancing
+            class_counts = {}
 
-        for file_path, cls, class_idx in split_samples:
-            target_class_dir = os.path.join(output_dir, split_name, cls)
-            os.makedirs(target_class_dir, exist_ok=True)
+            for file_path, cls, class_idx in split_samples:
+                target_class_dir = os.path.join(output_dir, split_name, cls)
+                os.makedirs(target_class_dir, exist_ok=True)
 
-            img = cv2.imread(file_path)
-            if img is None:
-                raise OSError(f"Could not read image after quality screening: {file_path}")
-            processed_img = preprocess_single_image(img, tracker=tracker)
+                img = cv2.imread(file_path)
+                if img is None:
+                    raise OSError(f"Could not read image after quality screening: {file_path}")
+                if cropper is not None:
+                    img = cropper.crop(img)
+                    if img is None:
+                        skipped_no_hand += 1
+                        continue
+                processed_img = preprocess_single_image(img, tracker=tracker)
 
-            base_name = os.path.splitext(os.path.basename(file_path))[0]
-            out_path = os.path.join(target_class_dir, f"{base_name}.jpg")
-            if not cv2.imwrite(out_path, processed_img):
-                raise OSError(f"Could not write processed image: {out_path}")
+                base_name = os.path.splitext(os.path.basename(file_path))[0]
+                out_path = os.path.join(target_class_dir, f"{base_name}.jpg")
+                if not cv2.imwrite(out_path, processed_img):
+                    raise OSError(f"Could not write processed image: {out_path}")
 
-            manifest_splits[split_name].append({
-                "image": os.path.relpath(out_path, output_dir).replace(os.sep, "/"),
-                "class_name": cls,
-                "label": class_idx,
-            })
+                manifest_splits[split_name].append({
+                    "image": os.path.relpath(out_path, output_dir).replace(os.sep, "/"),
+                    "class_name": cls,
+                    "label": class_idx,
+                })
 
-            class_counts[cls] = class_counts.get(cls, 0) + 1
+                class_counts[cls] = class_counts.get(cls, 0) + 1
 
-        # If training split and augmentation is enabled, synthesize augmented samples
-        if is_train and augment_train and class_counts:
-            print("  Applying balanced data augmentation to training partition...")
-            max_class_count = max(class_counts.values()) if target_per_class is None else target_per_class
+            # If training split and augmentation is enabled, synthesize augmented samples
+            if is_train and augment_train and class_counts:
+                print("  Applying balanced data augmentation to training partition...")
+                max_class_count = max(class_counts.values()) if target_per_class is None else target_per_class
 
-            for cls in classes:
-                cls_dir = os.path.join(output_dir, "train", cls)
-                existing_files = glob.glob(os.path.join(cls_dir, "*.jpg"))
-                current_cnt = len(existing_files)
+                for cls in classes:
+                    cls_dir = os.path.join(output_dir, "train", cls)
+                    existing_files = glob.glob(os.path.join(cls_dir, "*.jpg"))
+                    current_cnt = len(existing_files)
 
-                # Augment up to max_class_count to achieve balanced class counts
-                needed = max_class_count - current_cnt
-                if needed > 0 and existing_files:
-                    for i in range(needed):
-                        src_path = random.choice(existing_files)
-                        src_img = cv2.imread(src_path)
-                        if src_img is None:
-                            raise OSError(f"Could not read processed image for augmentation: {src_path}")
-                        aug_img = augment_image(src_img)
+                    # Augment up to max_class_count to achieve balanced class counts
+                    needed = max_class_count - current_cnt
+                    if needed > 0 and existing_files:
+                        for i in range(needed):
+                            src_path = random.choice(existing_files)
+                            src_img = cv2.imread(src_path)
+                            if src_img is None:
+                                raise OSError(f"Could not read processed image for augmentation: {src_path}")
+                            aug_img = augment_image(src_img)
 
-                        aug_name = f"aug_{i}_{os.path.basename(src_path)}"
-                        aug_path = os.path.join(cls_dir, aug_name)
-                        if not cv2.imwrite(aug_path, aug_img):
-                            raise OSError(f"Could not write augmented image: {aug_path}")
-                        manifest_splits[split_name].append({
-                            "image": os.path.relpath(aug_path, output_dir).replace(os.sep, "/"),
-                            "class_name": cls,
-                            "label": class_to_idx[cls],
-                        })
+                            aug_name = f"aug_{i}_{os.path.basename(src_path)}"
+                            aug_path = os.path.join(cls_dir, aug_name)
+                            if not cv2.imwrite(aug_path, aug_img):
+                                raise OSError(f"Could not write augmented image: {aug_path}")
+                            manifest_splits[split_name].append({
+                                "image": os.path.relpath(aug_path, output_dir).replace(os.sep, "/"),
+                                "class_name": cls,
+                                "label": class_to_idx[cls],
+                            })
+    finally:
+        if cropper is not None:
+            cropper.close()
+
+    if skipped_no_hand:
+        print(f"[Hand Crop] Skipped {skipped_no_hand} images with no detectable hand.")
 
     os.makedirs(MODELS_DIR, exist_ok=True)
     idx_to_class = {i: name for i, name in enumerate(classes)}
@@ -365,7 +441,7 @@ def build_processed_dataset(raw_dir=DEFAULT_RAW_DIR, output_dir=DEFAULT_PROCESSE
         "classes": classes,
         "num_classes": num_classes,
         "split_seed": 42,
-        "split_ratios": {"train": 0.70, "val": 0.15, "test": 0.15},
+        "split_ratios": {"train": 0.80, "val": 0.20},
         "counts": split_counts,
         "splits": manifest_splits,
     }
@@ -383,12 +459,27 @@ def main():
     parser.add_argument("--input", type=str, default=DEFAULT_RAW_DIR, help="Path to raw dataset folder (default: dataset/raw_asl)")
     parser.add_argument("--output", type=str, default=DEFAULT_PROCESSED_DIR, help="Path to output processed folder (default: dataset/processed)")
     parser.add_argument("--no-augment", action="store_true", help="Disable synthetic augmentation on the train set")
+    parser.add_argument(
+        "--max-per-class",
+        type=int,
+        default=None,
+        help="Use at most this many raw images per class (useful for quick CPU runs)",
+    )
+    parser.add_argument(
+        "--crop-hands",
+        action="store_true",
+        help="Crop each image to the MediaPipe hand box used by the live app",
+    )
     args = parser.parse_args()
+    if args.max_per_class is not None and args.max_per_class < 2:
+        parser.error("--max-per-class must be at least 2")
 
     build_processed_dataset(
         raw_dir=args.input,
         output_dir=args.output,
-        augment_train=not args.no_augment
+        augment_train=not args.no_augment,
+        max_per_class=args.max_per_class,
+        crop_hands=args.crop_hands,
     )
 
 

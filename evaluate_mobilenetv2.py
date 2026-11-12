@@ -1,5 +1,5 @@
 """
-Evaluate the trained MobileNetV2 sign language model on the test set.
+Evaluate the trained MobileNetV2 sign language model on the validation set.
 
 Fixes compared with the original:
   - predictions and true labels are collected in ONE pass (no shuffle mismatch)
@@ -35,11 +35,11 @@ CURVES_PATH = os.path.join(OUT_DIR, "mobilenetv2_training_curves.png")
 HISTORY_PATH = os.path.join(OUT_DIR, "training_history.json")   # written by train_model.py
 
 print("=" * 60)
-print("MOBILENETV2 MODEL EVALUATION")
+print("MOBILENETV2 VALIDATION EVALUATION")
 print("=" * 60)
 
 # ---------------- LOAD DATA AND MODEL ----------------
-_, _, test_ds = get_datasets()
+_, val_ds = get_datasets()
 CLASS_NAMES = list(load_class_names())
 NUM_CLASSES = len(CLASS_NAMES)
 print(f"Classes: {NUM_CLASSES}")
@@ -55,13 +55,13 @@ if model.output_shape[-1] != NUM_CLASSES:
     )
 
 # ---------------- OFFICIAL KERAS EVALUATION ----------------
-test_loss, test_acc = model.evaluate(test_ds, verbose=1)
-print(f"\nTest loss    : {test_loss:.4f}")
-print(f"Test accuracy: {test_acc * 100:.2f}%")
+val_loss, val_acc = model.evaluate(val_ds, verbose=1)
+print(f"\nValidation loss    : {val_loss:.4f}")
+print(f"Validation accuracy: {val_acc * 100:.2f}%")
 
 # ---------------- PREDICTIONS (single pass, order always matches) ----------------
 true_labels, pred_labels = [], []
-for images, labels in test_ds:
+for images, labels in val_ds:
     probs = model(images, training=False).numpy()
     labels = labels.numpy()
     if labels.ndim > 1:                      # one-hot -> index
@@ -71,7 +71,7 @@ for images, labels in test_ds:
 
 true_labels = np.array(true_labels)
 pred_labels = np.array(pred_labels)
-print(f"\nTest samples: {len(true_labels)}")
+print(f"\nValidation samples: {len(true_labels)}")
 
 # ---------------- METRICS ----------------
 accuracy = accuracy_score(true_labels, pred_labels)
@@ -79,9 +79,9 @@ precision = precision_score(true_labels, pred_labels, average="weighted", zero_d
 recall = recall_score(true_labels, pred_labels, average="weighted", zero_division=0)
 f1 = f1_score(true_labels, pred_labels, average="weighted", zero_division=0)
 
-if abs(accuracy - test_acc) > 0.005:
+if abs(accuracy - val_acc) > 0.005:
     print(f"\n[WARNING] sklearn accuracy ({accuracy:.4f}) differs from Keras "
-          f"accuracy ({test_acc:.4f}). Check the data pipeline for shuffling or "
+          f"accuracy ({val_acc:.4f}). Check the data pipeline for shuffling or "
           "different preprocessing.")
 
 print("\n" + "=" * 60)
@@ -102,7 +102,7 @@ print("\n" + report)
 
 with open(REPORT_PATH, "w", encoding="utf-8") as f:
     f.write("MobileNetV2 Classification Report\n" + "=" * 60 + "\n\n")
-    f.write(f"Test loss: {test_loss:.4f}\n")
+    f.write(f"Validation loss: {val_loss:.4f}\n")
     f.write(f"Accuracy : {accuracy:.4f}\n")
     f.write(f"Precision: {precision:.4f}\n")
     f.write(f"Recall   : {recall:.4f}\n")
@@ -144,32 +144,66 @@ pairs.sort(reverse=True)
 
 print("\nMost confused pairs (true -> predicted):")
 if not pairs:
-    print("  none, no mistakes on the test set")
+    print("  none, no mistakes on the validation set")
 for count, i, j in pairs[:10]:
     print(f"  {CLASS_NAMES[i]:>8} -> {CLASS_NAMES[j]:<8} {count} times")
 
-# ---------------- OPTIONAL: TRAINING CURVES ----------------
-# In train_model.py, after training, add:
-#     json.dump(history.history, open("models/training_history.json", "w"))
-# (if you fine-tune, merge both histories' lists before saving)
+# ---------------- TRAINING LOSS / ACCURACY CURVES ----------------
 if os.path.exists(HISTORY_PATH):
-    with open(HISTORY_PATH) as f:
+    with open(HISTORY_PATH, "r", encoding="utf-8") as f:
         hist = json.load(f)
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
-    for ax, key, name in zip(axes, ("accuracy", "loss"), ("Accuracy", "Loss")):
-        if key in hist:
-            ax.plot(hist[key], label="train")
-        if f"val_{key}" in hist:
-            ax.plot(hist[f"val_{key}"], label="validation")
-        ax.set_title(name)
+    stage1_epochs = hist.get("stage1_epochs")
+    epoch_series = (
+        ("loss", "val_loss", "Model loss"),
+        ("accuracy", "val_accuracy", "Model accuracy"),
+    )
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    for ax, (train_key, val_key, title) in zip(axes, epoch_series):
+        train_values = hist.get(train_key, [])
+        val_values = hist.get(val_key, [])
+        if train_values:
+            ax.plot(
+                range(1, len(train_values) + 1),
+                train_values,
+                label="train",
+                color="#1f77b4",
+                linewidth=1.8,
+            )
+        if val_values:
+            ax.plot(
+                range(1, len(val_values) + 1),
+                val_values,
+                label="validation",
+                color="#ff7f0e",
+                linewidth=1.8,
+            )
+        if (
+            isinstance(stage1_epochs, int)
+            and 0 < stage1_epochs < max(len(train_values), len(val_values))
+        ):
+            ax.axvline(
+                stage1_epochs,
+                color="#64748b",
+                linestyle="--",
+                linewidth=1,
+                label="fine-tuning starts",
+            )
+        ax.set_title(title)
         ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss" if "loss" in train_key else "Accuracy")
+        ax.grid(True, alpha=0.3)
         ax.legend()
     fig.tight_layout()
     fig.savefig(CURVES_PATH, dpi=200, bbox_inches="tight")
+    if SHOW_PLOTS:
+        plt.show()
     plt.close(fig)
     print(f"Saved: {CURVES_PATH}")
 else:
-    print(f"\n[Info] No training history at {HISTORY_PATH}; skipping training curves.")
+    print(
+        f"\n[Info] No training history at {HISTORY_PATH}; skipping training curves. "
+        "Train with train_model.py first to save the history."
+    )
 
 print("\n" + "=" * 60)
 print("EVALUATION COMPLETE")
